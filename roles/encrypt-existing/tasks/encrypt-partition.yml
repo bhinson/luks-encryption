@@ -21,7 +21,7 @@
       state: present
     when: single_partition == true
 
-  - name: Set single partition flag
+  - name: Set source and destination based on whether single partition exists
     # Set partitions based on whole disk or single partition
     set_fact:
       src_partition: "{{ '{{ src_disk }}1' if (single_partition == true) else '{{ src_disk }}' }}"
