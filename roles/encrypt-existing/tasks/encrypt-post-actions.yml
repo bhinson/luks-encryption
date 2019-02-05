@@ -1,0 +1,58 @@
+---
+  - name: Reboot system if there were changes
+    # Use reboot module later, which requires ansible-2.7
+    block:
+
+    - name: Reboot system
+      shell:  sleep 2 && /sbin/shutdown -r now
+      ignore_errors: true
+      async: 1
+      poll: 0
+
+    - name: Wait for system to complete reboot
+      local_action: wait_for
+      args:
+        host: "{{ inventory_hostname }}"
+        state: started
+        delay: 5
+        timeout: 300
+        connect_timeout: 15
+        port: 22
+      delegate_to: localhost
+
+    # Conditional block, run when encryption actions
+    # were taken
+    when: reboot_required == true
+
+  - name: Wipe unencrypted root filesystem
+    block:
+
+    - name: Gather root filesystem device information
+      shell: lsblk -nfl {{ src_disk }} | grep -w {{ unencrypted_uuid }}
+      register: lsblk_unencrypted
+      # Don't report changed since this is a read-only command
+      changed_when: false
+
+    - name: Parse root partition information
+      set_fact:
+        # Device name is first field of output
+        src_partition: "{{ lsblk_unencrypted.stdout.split()[0] }}"
+
+    - name: Wipe signature from unencrypted root partition
+      # Best practice should overwrite all data, but
+      # for now just wipe filesystem header
+      shell: wipefs -a /dev/{{ src_partition }}
+      # Ensure /sbin path is set. Workaround for non-sudo environments.
+      environment:
+        PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+
+    - name: Remove unencrypted root partition
+      parted:
+        device: "{{ src_disk }}"
+        # Partition number is the last character in source partition
+        number: "{{ src_partition[-1] }}"
+        state: absent
+
+    # Conditional block, run when root filesystem
+    # was encrypted, and after system has been rebooted
+    when: wipe_unencrypted_root == true

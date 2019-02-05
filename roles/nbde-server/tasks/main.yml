@@ -1,0 +1,24 @@
+---
+
+- name: Install tang server package
+  yum:
+    name: tang
+    state: present
+
+- name: Start tang service
+  service:
+    name: tangd.socket
+    state: started
+    enabled: yes
+
+- name: Configure firewall
+  firewalld:
+    service: http
+    permanent: yes
+    state: enabled
+  notify:
+  - Reload firewall
+
+- name: Check firewall service status
+  service_facts:
+  register: services_state

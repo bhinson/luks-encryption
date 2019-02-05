@@ -1,0 +1,59 @@
+---
+
+#  vars_prompt:
+#    - name: luks_passphrase
+#      prompt: "passphrase to use for encryption (8 character minimum, with complexity)"
+#      private: yes
+#      confirm: yes
+
+#  tasks:
+
+  - name: Verify password length
+    assert:
+      that: "{{ luks_passphrase | length }} >= 8"
+    no_log: true
+
+  - name: Install prerequisite packages
+    yum:
+      name: "{{ item }}"
+      state: present
+    with_items:
+      - cryptsetup
+      - clevis
+      - clevis-luks
+      - clevis-dracut
+      - luksmeta
+      - dracut-network
+      - rsync
+
+  - name: Verify NBDE server accessibility
+    uri:
+      url: http://{{ item.server }}/adv
+    with_items:
+    - "{{ tang_servers }}"
+    no_log: true
+
+  - name: Enable NBDE password agent
+    service:
+      name: clevis-luks-askpass.path
+      enabled: yes
+
+  - name: Enable reboot checking
+    set_fact:
+      reboot_required: false
+      wipe_unencrypted_root: false
+
+  - name: Encrypt LVM partitions
+    include: encrypt-lvm.yml search_key={{ item }}
+    with_items: "{{ volume_groups | default([]) }}"
+
+  - name: Encrypt standard partitions
+    include: encrypt-standard.yml search_key={{ item }}
+    with_items: "{{ standard_partition_mountpoints | default([]) }}"
+
+  - name: Encrypt root partition
+    include: encrypt-root.yml search_key={{ item }}
+    with_items: "{{ root_disk | default([]) }}"
+
+  - name: Run post actions if necessary
+    include: encrypt-post-actions.yml

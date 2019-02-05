@@ -1,0 +1,8 @@
+---
+
+- name: Reload firewall
+  service:
+    name: firewalld
+    state: reloaded
+  when: services_state.ansible_facts.services["firewalld.service"].state == "running"
+

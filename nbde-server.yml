@@ -1,0 +1,6 @@
+---
+
+- name: Install and configure NBDE/tang server
+  hosts: nbde
+  roles:
+    - role: nbde-server

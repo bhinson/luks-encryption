@@ -1,0 +1,38 @@
+---
+# Example formatting:
+# Uncomment one or more lines to specify
+# which parts of the system get encrypted.
+#
+# volume_groups:
+# List of LVM volume group names.  Note that
+# if the VG contains dashes, double-dashes are needed.
+#
+# standard_partition_mountpoints:
+# Specify non-LVM file systems by mount point.
+#
+# root_disk:
+# Block device (disk) containing root file system.
+# Note that this must be non-LVM.
+# ----------
+#
+# volume_groups: ["vgdata", "vgopenshift", "docker--vg"]
+# standard_partition_mountpoints: ["/mnt/resource"]
+# root_disk: ["vda"]
+
+
+# List of NBDE/tang servers to use for automatic
+# decryption on boot.  To obtain the thumbprint, if you
+# have access to the Tang server's database directory, simply do:
+#
+#     $ jose jwk thp -i $DBDIR/$SIG.jwk 
+#
+# For more info see:
+# https://access.redhat.com/documentation/en-US/Red_Hat_Enterprise_Linux/7/html/Security_Guide/sec-Using_Network-Bound_Disk_Encryption.html
+# ----------
+#
+tang_servers:
+- server: server1.home
+  thumbprint: abcdefghijklmnopqrstuvwxyz_
+# - server: server2.home
+#   thumbprint: ABCDEFG_HIJKLMNOPQRSTUVWXYZ
+

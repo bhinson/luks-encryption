@@ -1,0 +1,145 @@
+---
+  - name: Set device naming based on root partition
+    set_fact:
+      # Disk matching is based on mount point name
+      src_disk: "{{ search_key }}"
+      luks_name: root_luks
+
+  - name: Check for existing filesystem encryption
+    stat:
+      path: /dev/mapper/{{ luks_name }}
+    register: stat_out
+
+  - name: Encrypt new partition and migrate existing data
+    block:
+
+    - name: Find pairs of same-sized disks
+      include: match-disks.yml
+
+    - name: Gather root filesystem device information
+      shell: lsblk -nfl {{ src_disk }} | grep -w '/'
+      register: lsblk_unencrypted
+      # Don't report changed since this is a read-only command
+      changed_when: false
+
+    - name: Parse root partition information
+      set_fact:
+        # Device name is first field of output
+        src_partition: "{{ lsblk_unencrypted.stdout.split()[0] }}"
+        fstype: "{{ lsblk_unencrypted.stdout.split()[1] }}"
+        unencrypted_uuid: "{{ lsblk_unencrypted.stdout.split()[2] }}"
+
+    - name: Ensure directory is unmounted
+      mount:
+        path: "/mnt/encrypted/{{ luks_name }}"
+        src: "/dev/mapper/{{ luks_name }}"
+        state: unmounted
+
+    - name: Create new encrypted partition
+      include: encrypt-partition.yml
+
+    - name: Get original filesystem type
+      shell: lsblk -nfl {{ src_partition }}
+      register: lsblk_out
+      # Don't report changed since this is a read-only command
+      changed_when: false
+
+    - name: Create filesystem on encrypted device
+      filesystem:
+        dev: "/dev/mapper/{{ luks_name }}"
+        fstype: "{{ fstype }}"
+        resizefs: no
+
+    - name: Update fstab for persistent mount at reboot
+      mount:
+        path: "/"
+        src: "/dev/mapper/{{ luks_name }}"
+        fstype: "{{ fstype }}"
+        # Don't actually mount, just update fstab
+        state: present
+
+    - name: Get LUKS UUID
+      shell: "cryptsetup luksUUID {{ dest_disk }}"
+      # Ensure /sbin path is set. Workaround for non-sudo environments.
+      environment:
+        PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+      register: uuid_out
+
+    - name: Update crypttab for persistent unlock
+      # Create the root filesystem entry without _netdev option
+      crypttab:
+        name: "{{ luks_name }}"
+        backing_device: "UUID={{ uuid_out.stdout }}"
+        password: none
+        state: present
+
+    - name: Rebuild initial RAMdisk
+      # Add device for encrypted root filesystem, which triggers
+      # crypto configs to be added into intial boot environment
+      shell: dracut -f --add-device /dev/mapper/{{ luks_name }}
+      # Ensure /sbin path is set. Workaround for non-sudo environments.
+      environment:
+        PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+
+    - name: Update default grub options
+      # Add UUID of encrypted root device to default grub configuration
+      lineinfile:
+        state: present
+        dest: /etc/sysconfig/grub
+        backrefs: yes
+        # Find grub commandline entry
+        regexp: '^(GRUB_CMDLINE_LINUX=(?!.*luks)\"[^\"]+)(\".*)'
+        # Add LUKS device name and UUID to the end of existing options
+        line: '\1 rd.luks.name={{ luks_name }}={{ uuid_out.stdout }}\2'
+
+    - name: Rewrite updated grub configuration options
+      shell: grub2-mkconfig -o /boot/grub2/grub.cfg
+      # Ensure /sbin path is set. Workaround for non-sudo environments.
+      environment:
+        PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+
+    - name: Get UUID of encrypted root filesystem
+      shell: lsblk -nfl /dev/mapper/{{ luks_name }}
+      register: lsblk_encrypted
+      # Don't report changed since this is a read-only command
+      changed_when: false
+
+    - name: Parse encrypted root filesystem UUID
+      set_fact:
+        # uuid type is third field of output
+        encrypted_uuid: "{{ lsblk_encrypted.stdout.split()[2] }}"
+
+    - name: Replace root device in grub configuration
+      # This is necessary because grub2-mkconfig detects the
+      # existing unencrypted root filesystem when rewriting the
+      # grub configuration
+      replace:
+        dest: /boot/grub2/grub.cfg
+        regexp: "{{ unencrypted_uuid }}"
+        replace: "{{ encrypted_uuid }}"
+
+    - name: Mount new encrypted filesystem
+      mount:
+        path: "/mnt/encrypted/{{ luks_name }}"
+        src: "/dev/mapper/{{ luks_name }}"
+        fstype: "{{ fstype }}"
+        state: mounted
+        # Temporary mount, don't update fstab yet
+        fstab: /tmp/fstab
+
+    - name: Copy from unencrypted to encrypted filesystem
+      shell: rsync -axXHAS --delete / /mnt/encrypted/{{ luks_name }}
+
+    - name: Unmount encrypted filesystem
+      mount:
+        path: "/mnt/encrypted/{{ luks_name }}"
+        src: "/dev/mapper/{{ luks_name }}"
+        state: unmounted
+
+    - name: Set reboot required
+      set_fact:
+        reboot_required: true
+        wipe_unencrypted_root: true
+
+    # Conditional block, run when existing LUKS device is not already present
+    when: stat_out.stat.exists == false

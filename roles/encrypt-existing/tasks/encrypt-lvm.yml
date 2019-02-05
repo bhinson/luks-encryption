@@ -1,0 +1,84 @@
+---
+  - name: Set device naming based on volume group
+    set_fact:
+      # Disk matching is based on volume group name
+      vg_name: "{{ search_key }}"
+
+  - name: Strip extra dashes from volume group name
+    set_fact:
+      vg: "{{ vg_name | regex_replace('-(\\s*-)+', '-') }}"
+
+  - name: Set LUKS device name
+    set_fact:
+      # Use the vg name with _luks added
+      luks_name: "{{ vg }}_luks"
+
+  - name: Check for existing LVM encryption
+    stat:
+      path: /dev/mapper/{{ luks_name }}
+    register: stat_out
+
+  - name: Encrypt new physical volume and migrate existing data
+    block:
+
+    - name: Find pairs of same-sized disks
+      include: match-disks.yml
+
+    - name: Create new encrypted partition
+      include: encrypt-partition.yml 
+
+    - name: Add encrypted physical volume to existing volume group
+      shell: "vgextend {{ vg }} /dev/mapper/{{ luks_name }}"
+      # Ensure /sbin path is set. Workaround for non-sudo environments.
+      environment:
+        PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+
+    - name: Migrate data to encrypted physical volume
+      shell: "pvmove {{ src_partition }} /dev/mapper/{{ luks_name }}"
+      # Ensure /sbin path is set. Workaround for non-sudo environments.
+      environment:
+        PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+
+    - name: Remove unencrypted physical volume from volume group
+      shell: "vgreduce {{ vg }} {{ src_partition }}"
+      # Ensure /sbin path is set. Workaround for non-sudo environments.
+      environment:
+        PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+
+    - name: Wipe header from unencrypted physical volume
+      shell: "pvremove {{ src_partition }}"
+      # Ensure /sbin path is set. Workaround for non-sudo environments.
+      environment:
+        PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+
+    - name: Get filesystem details of logical volume
+      shell: lsblk -fl | grep {{ vg_name }} | grep -v LVM2_member
+      register: lsblk_out
+      # Don't report changed since this is a read-only command
+      changed_when: false
+
+    - name: Parse logical volume details
+      set_fact:
+        # filesystem type is second field
+        fstype: "{{ lsblk_out.stdout.split()[1] }}"
+        # UUID is third field
+        uuid: "{{ lsblk_out.stdout.split()[2] }}"
+        # Mount point is fourth field
+        src_mountpoint: "{{ lsblk_out.stdout.split()[3] }}"
+      # Only consider this filesystem when it is currently mounted
+      when: "( lsblk_out.stdout.split() | length ) >= 4"
+
+    - name: Update fstab to enable automatic encryption unlock
+      mount:
+        path: "{{ src_mountpoint }}"
+        src: "UUID={{ uuid }}"
+        fstype: "{{ fstype }}"
+        # Set _netdev option for NBDE integration
+        opts: _netdev
+        # Don't actually mount, just update fstab
+        state: present
+      # Only update fstab when this filesystem is currently mounted
+      when: "( lsblk_out.stdout.split() | length ) >= 4"
+
+    # Conditional block, run when existing LUKS device is not already present
+    when: stat_out.stat.exists == false

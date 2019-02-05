@@ -1,0 +1,76 @@
+---
+  - name: Check for LVM versus standard partition
+    shell: lsblk | grep {{ search_key }}
+    register: lsblk_out
+    # Don't report changed since this is a read-only command
+    changed_when: false
+
+  - name: Process physical volume size for LVM
+    block:
+
+    - name: Check for physical volume size
+      shell: pvs --noheadings | grep {{ vg }}
+      # Ensure /sbin path is set. Workaround for non-sudo environments.
+      environment:
+        PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+      register: pvs_out
+      # Don't report changed since this is a read-only command
+      changed_when: false
+
+    - name: Get LVM physical volume size
+      # Physical volume is first column of pvs output
+      shell: lsblk -p -l | grep {{ pvs_out.stdout_lines[0].split()[0] }}
+      register: lsblk_pv_out
+      # Don't report changed since this is a read-only command
+      changed_when: false
+
+    - name: Save LVM disk size
+      set_fact:
+        disk_size: "{{ lsblk_pv_out.stdout.split()[3] }}"
+        # To find the underlying disk, strip the last character (partition number)
+        # but only when the last character is a number (1). This allows PVs to reside
+        # on full disks with no partition table.
+        underlying_disk: "{{ lsblk_pv_out.stdout.split()[0][:-1] if lsblk_pv_out.stdout.split()[0][-1] == '1' else lsblk_pv_out.stdout.split()[0] }}"
+
+    # Conditional block, run when LVM was detected
+    when: lsblk_out.stdout.split()[5] == "lvm"
+
+  - name: Get non-LVM disk size to use for correlation
+    block:
+
+    - name: Search for block device
+      shell: lsblk -p --nodeps | grep {{ search_key }}
+      register: lsblk_standard_partition_out
+      # Don't report changed since this is a read-only command
+      changed_when: false
+
+    - name: Save disk size
+      set_fact:
+        disk_size: "{{ lsblk_standard_partition_out.stdout.split()[3] }}"
+        # To find the underlying disk, strip the last character (partition number)
+        underlying_disk: "{{ lsblk_standard_partition_out.stdout.split()[0] }}"
+
+    # Conditional block, run when standard partition was detected
+    when: lsblk_out.stdout.split()[5] != "lvm"
+
+  - name: Find source disk
+    shell: lsblk -p --nodeps | grep -w {{ disk_size }} | grep {{ underlying_disk }}
+    register: lsblk_src_disk
+    # Don't report changed since this is a read-only command
+    changed_when: false
+
+  - name: Find destination disk
+    shell: lsblk -p --nodeps | grep -w {{ disk_size }} | grep -v {{ underlying_disk }}
+    register: lsblk_dest_disk
+    # Don't report changed since this is a read-only command
+    changed_when: false
+
+  - name: Save mapping for source and destination disks
+    set_fact:
+      src_disk: "{{ lsblk_src_disk.stdout_lines[0].split()[0] }}"
+      dest_disk: "{{ lsblk_dest_disk.stdout_lines[0].split()[0] }}"
+
+  - name: Print disk mapping
+    debug:
+      msg: "{{ src_disk }} maps to {{ dest_disk }}"
+      verbosity: 1
