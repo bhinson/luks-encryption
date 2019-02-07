@@ -1,0 +1,26 @@
+---
+# List of NBDE/tang servers to use for automatic
+# decryption on boot.  To obtain the thumbprint, if you
+# have access to the Tang server's database directory, simply do:
+#
+#     $ jose jwk thp -i $DBDIR/$SIG.jwk 
+#
+# For more info see:
+# https://access.redhat.com/documentation/en-US/Red_Hat_Enterprise_Linux/7/html/Security_Guide/sec-Using_Network-Bound_Disk_Encryption.html
+# ----------
+#
+tang_servers:
+- server: server1.home
+  thumbprint: abcdefghijklmnopqrstuvwxyz_
+# - server: server2.home
+#   thumbprint: ABCDEFG_HIJKLMNOPQRSTUVWXYZ
+
+# Size of disk in GB to use for new filesystem.  This should match
+# the size field in the output of 'lsblk'.
+disk_size: 9G
+
+# Filesystem type to create
+fstype: ext4
+
+# Mount point for new encrypted filesystem
+mountpoint: /mnt/resource

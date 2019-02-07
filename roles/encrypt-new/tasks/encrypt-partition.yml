@@ -1,0 +1,75 @@
+---
+  - name: Create single partition on destination disk
+    parted:
+      device: "{{ dest_disk }}"
+      number: 1
+      state: present
+
+  - name: Close encrypted device if active
+    shell: "cryptsetup luksClose {{ luks_name }}"
+    # Ensure /sbin path is set. Workaround for non-sudo environments.
+    environment:
+      PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+    register: cryptsetup_out
+    # Ignore errors since device will be encrypted next
+    failed_when: false
+    changed_when: cryptsetup_out.rc == 0
+
+  - name: Encrypt partition
+    shell: "cryptsetup luksFormat {{ dest_disk }} <<< {{ luks_passphrase }}"
+    # Ensure /sbin path is set. Workaround for non-sudo environments.
+    environment:
+      PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+    no_log: true
+
+  - name: Decrypt partition for continued setup
+    shell: "cryptsetup luksOpen {{ dest_disk }} {{ luks_name }} <<< {{ luks_passphrase }}"
+    # Ensure /sbin path is set. Workaround for non-sudo environments.
+    environment:
+      PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+    no_log: true
+
+  - name: Initialize LUKS metadata
+    shell: luksmeta init -d {{ dest_disk }} -f
+
+  - name: Wipe any existing NBDE encryption key
+    shell: luksmeta wipe -d {{ dest_disk }} -s {{ (luks_slot + 1) }} -f
+    with_items:
+    - "{{ tang_servers }}"
+    # Use loop_control to set item variable, to avoid issue
+    # with nested item loop. Also keep track of loop index
+    # which is used for the slot to wipe
+    loop_control:
+      loop_var: line_item
+      index_var: luks_slot
+
+  - name: Register encrypted partition with NBDE server
+    shell: clevis bind luks -f -s {{ (luks_slot + 1) }} -d {{ dest_disk }} tang '{"url":"{{ line_item.server }}","thp":"{{ line_item.thumbprint }}"}' <<< {{ luks_passphrase }}
+    environment:
+      PATH: "{{ ansible_env.PATH }}:/sbin/:/usr/sbin"
+    with_items:
+    - "{{ tang_servers }}"
+    # Use loop_control to set item variable, to avoid issue
+    # with nested item loop. Also keep track of loop index
+    # which is used for the slot to write
+    loop_control:
+      loop_var: line_item
+      index_var: luks_slot
+    no_log: true
+
+  - name: Get LUKS UUID
+    shell: "cryptsetup luksUUID {{ dest_disk }}"
+    # Ensure /sbin path is set. Workaround for non-sudo environments.
+    environment:
+      PATH: "/usr/sbin:{{ ansible_env.PATH }}"
+    register: uuid_out
+
+  - name: Update crypttab for persistent unlock
+    crypttab:
+      name: "{{ luks_name }}"
+      backing_device: "UUID={{ uuid_out.stdout }}"
+      password: none
+      state: present
+      # Add _netdev option for for automatic decryption at startup.
+      opts: _netdev
+

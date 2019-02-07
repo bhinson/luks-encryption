@@ -1,0 +1,91 @@
+---
+
+  - name: Verify password length
+    assert:
+      that: "{{ luks_passphrase | length }} >= 8"
+    no_log: true
+
+  - name: Install prerequisite packages
+    yum:
+      name: "{{ item }}"
+      state: present
+    with_items:
+      - cryptsetup
+      - clevis
+      - clevis-luks
+      - clevis-dracut
+      - luksmeta
+      - dracut-network
+
+  - name: Verify NBDE server accessibility
+    uri:
+      url: http://{{ item.server }}/adv
+    with_items:
+    - "{{ tang_servers }}"
+    no_log: true
+
+  - name: Enable NBDE password agent
+    service:
+      name: clevis-luks-askpass.path
+      enabled: yes
+
+  - name: Set LUKS device name
+    set_fact:
+      # Use the last word of the mount point, with _luks added
+      luks_name: "{{ mountpoint.split('/')[-1] }}_luks"
+
+  - name: Check for existing filesystem encryption
+    stat:
+      path: /dev/mapper/{{ luks_name }}
+    register: stat_out
+
+  - name: Encrypt new partition
+    block:
+
+    - name: Find destination disk
+      shell: lsblk -p --nodeps | grep -w {{ disk_size }} 
+      register: lsblk_dest_disk
+      # Don't report changed since this is a read-only command
+      changed_when: false
+
+    - name: Save mapping for source and destination disks
+      set_fact:
+        dest_disk: "{{ lsblk_dest_disk.stdout_lines[0].split()[0] }}"
+
+    - name: Ensure directory is unmounted
+      mount:
+        path: "{{ mountpoint }}"
+        src: "/dev/mapper/{{ luks_name }}"
+        state: unmounted
+
+    - name: Create new encrypted partition
+      include: encrypt-partition.yml
+
+    - name: Create filesystem on encrypted device
+      filesystem:
+        dev: "/dev/mapper/{{ luks_name }}"
+        fstype: "{{ fstype }}"
+        resizefs: no
+
+    - name: Update fstab for persistent mount at reboot
+      mount:
+        path: "{{ mountpoint }}"
+        src: "/dev/mapper/{{ luks_name }}"
+        fstype: "{{ fstype }}"
+        # Set _netdev option for NBDE integration
+        opts: _netdev
+        # Don't actually mount, just update fstab
+        state: present
+
+    - name: Mount new encrypted filesystem
+      mount:
+        path: "{{ mountpoint }}"
+        src: "/dev/mapper/{{ luks_name }}"
+        fstype: "{{ fstype }}"
+        state: mounted
+        # Temporary mount, don't update fstab yet
+        fstab: /tmp/fstab
+
+    # Conditional block, run when existing LUKS device is not already present
+    when: stat_out.stat.exists == false
+

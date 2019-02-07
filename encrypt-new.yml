@@ -1,0 +1,12 @@
+---
+
+- name: Encrypt new filesystems
+  hosts: encrypted
+  roles:
+    - role: encrypt-new
+
+  vars_prompt:
+    - name: luks_passphrase
+      prompt: "passphrase to use for encryption (8 character minimum, with complexity)"
+      private: yes
+      confirm: yes
