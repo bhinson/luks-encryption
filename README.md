@@ -20,6 +20,12 @@ Assumptions / ToDo:
 - Using root=UUID=... in /boot/grub2/grub.cfg
 - After encryption, the remaining unencrypted filesystems are not wiped, only the signature of the root filesystem
 
+encrypt-new:
+-----------
+
+Create a new encrypted filesystem and mount to a specified directory.  The disk size is specified, and must
+be the only disk of that size added to the system.
+
 nbde-server:
 -----------
 
