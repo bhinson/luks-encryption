@@ -5,6 +5,11 @@
       number: 1
       state: present
 
+  - name: Set destination partition
+    # Set destination based on single partition
+    set_fact:
+      dest_disk: "{{ dest_disk }}1"
+
   - name: Close encrypted device if active
     shell: "cryptsetup luksClose {{ luks_name }}"
     # Ensure /sbin path is set. Workaround for non-sudo environments.
